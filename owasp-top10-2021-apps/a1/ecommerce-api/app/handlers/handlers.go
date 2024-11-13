@@ -21,6 +21,7 @@ func GetTicket(c echo.Context) error {
 	//authuserId := c.Get("userID").(string)//Id do usuário autenticado
 
 	authuserID,ok:= c.Get("userID").(string)
+	
 	if !ok {
 		return c.JSON(http.StatusUnauthorized, map[string]string{"result": "error", "details": "User not authenticated"})
 	}
