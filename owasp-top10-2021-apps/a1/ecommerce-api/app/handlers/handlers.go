@@ -14,9 +14,20 @@ func HealthCheck(c echo.Context) error {
 }
 
 // GetTicket returns the userID ticket.
+//Precisamos garantir que essa função só seja acessada por usuários autenticados
+// O userID corresponde ao UserID do solicitante???
 func GetTicket(c echo.Context) error {
-	id := c.Param("id")
+	
+	authuserID := c.Get("userID").string //Id do usuário autenticado
+
+	id := c.Param("id") //extrai o ID do usuário da URL
+
+	if authuserID != id{
+		return c.JSON(http.StatusForbidden, map[string]string{"result": "error", "details": "Access denied."})
+	}
+	
 	userDataQuery := map[string]interface{}{"userID": id}
+	
 	userDataResult, err := db.GetUserData(userDataQuery)
 	if err != nil {
 		// could not find this user in MongoDB (or MongoDB err connection)
