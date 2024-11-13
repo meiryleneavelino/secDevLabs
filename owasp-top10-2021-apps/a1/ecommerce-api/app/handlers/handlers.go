@@ -18,7 +18,7 @@ func HealthCheck(c echo.Context) error {
 // O userID corresponde ao UserID do solicitante???
 func GetTicket(c echo.Context) error {
 	
-	authuserID := c.Get("userID").string //Id do usuário autenticado
+	authuserID := c.Get("userID").(string)//Id do usuário autenticado
 
 	id := c.Param("id") //extrai o ID do usuário da URL
 
