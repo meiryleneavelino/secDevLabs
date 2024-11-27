@@ -14,42 +14,43 @@ func HealthCheck(c echo.Context) error {
 }
 
 // GetTicket returns the userID ticket.
-//Precisamos garantir que essa função só seja acessada por usuários autenticados
-// O userID corresponde ao UserID do solicitante???
 func GetTicket(c echo.Context) error {
-	
-	//authuserId := c.Get("userID").(string)//Id do usuário autenticado
+    // Obter o userID do contexto (definido por um middleware de autenticação)
+    userIDFromContext := c.Get("userID").(string) // Assumindo que o middleware adiciona userID no contexto
 
-	authuserID,ok:= c.Get("userID").(string)
-	
-	if !ok {
-		return c.JSON(http.StatusUnauthorized, map[string]string{"result": "error", "details": "User not authenticated"})
-	}
+    // Obter o userID da URL
+    id := c.Param("id")
 
-	id := c.Param("id") //extrai o ID do usuário da URL
-	
+    // Verificar se o userID autenticado corresponde ao userID fornecido
+    if userIDFromContext != id {
+        return c.JSON(http.StatusForbidden, map[string]string{
+            "result":  "error",
+            "details": "Access denied. You are not authorized to view this ticket.",
+        })
+    }
 
-	if authuserId != id{
-		return c.JSON(http.StatusForbidden, map[string]string{"result": "error", "details": "Access denied."})
-	}
-	
-	userDataQuery := map[string]interface{}{"userID": id}
-	
-	userDataResult, err := db.GetUserData(userDataQuery)
-	if err != nil {
-		// could not find this user in MongoDB (or MongoDB err connection)
-		return c.JSON(http.StatusBadRequest, map[string]string{"result": "error", "details": "Error finding this UserID."})
-	}
+    // Consultar o banco de dados com base no userID
+    userDataQuery := map[string]interface{}{"userID": id}
+    userDataResult, err := db.GetUserData(userDataQuery)
+    if err != nil {
+        // Erro ao buscar dados do usuário no MongoDB
+        return c.JSON(http.StatusBadRequest, map[string]string{
+            "result":  "error",
+            "details": "Error finding this UserID.",
+        })
+    }
 
-	format := c.QueryParam("format")
-	if format == "json" {
-		return c.JSON(http.StatusOK, map[string]string{
-			"result":   "success",
-			"username": userDataResult.Username,
-			"ticket":   userDataResult.Ticket,
-		})
-	}
+    // Verificar o formato da resposta (JSON ou texto)
+    format := c.QueryParam("format")
+    if format == "json" {
+        return c.JSON(http.StatusOK, map[string]string{
+            "result":   "success",
+            "username": userDataResult.Username,
+            "ticket":   userDataResult.Ticket,
+        })
+    }
 
-	msgTicket := fmt.Sprintf("Hey, %s! This is your ticket: %s\n", userDataResult.Username, userDataResult.Ticket)
-	return c.String(http.StatusOK, msgTicket)
+    // Resposta em texto simples
+    msgTicket := fmt.Sprintf("Hey, %s! This is your ticket: %s\n", userDataResult.Username, userDataResult.Ticket)
+    return c.String(http.StatusOK, msgTicket)
 }

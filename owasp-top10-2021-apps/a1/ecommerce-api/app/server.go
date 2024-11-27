@@ -5,34 +5,92 @@ import (
 	"fmt"
 	"html/template"
 	"io"
+	"net/http"
 	"os"
 
 	apiContext "github.com/globocom/secDevLabs/owasp-top10-2021-apps/a1/ecommerce-api/app/context"
-	"github.com/globocom/secDevLabs/owasp-top10-2021-apps/a1/ecommerce-api/app/db"
 	"github.com/globocom/secDevLabs/owasp-top10-2021-apps/a1/ecommerce-api/app/handlers"
+	"github.com/globocom/secDevLabs/owasp-top10-2021-apps/a1/ecommerce-api/app/db"
 	"github.com/labstack/echo"
 	"github.com/labstack/echo/middleware"
+	"github.com/dgrijalva/jwt-go"
 )
 
 // TemplateRegistry defines the template registry struct
-// Ref: https://medium.freecodecamp.org/how-to-setup-a-nested-html-template-in-the-go-echo-web-framework-670f16244bb4
 type TemplateRegistry struct {
 	templates map[string]*template.Template
 }
 
-// Render implement e.Renderer interface
-// Ref: https://medium.freecodecamp.org/how-to-setup-a-nested-html-template-in-the-go-echo-web-framework-670f16244bb4
+// Render implements e.Renderer interface
 func (t *TemplateRegistry) Render(w io.Writer, name string, data interface{}, c echo.Context) error {
 	tmpl, ok := t.templates[name]
 	if !ok {
-		err := errors.New("Template not found -> " + name)
-		return err
+		return fmt.Errorf("template not found: %s", name)
 	}
 	return tmpl.ExecuteTemplate(w, "base.html", data)
 }
 
-func main() {
+// Middleware: Checks if a user is authorized for a specific ticket
+func isAuthorized(dbInstance *db.DB) echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			user, ok := c.Get("user").(*jwt.Token)
+			if !ok {
+				return echo.ErrUnauthorized
+			}
 
+			claims, ok := user.Claims.(jwt.MapClaims)
+			if !ok {
+				return echo.ErrUnauthorized
+			}
+
+			userID := claims["id"]
+			ticketID := c.Param("id")
+			if !userHasAccessToTicket(dbInstance, fmt.Sprintf("%v", userID), ticketID) {
+				return echo.ErrUnauthorized
+			}
+
+			return next(c)
+		}
+	}
+}
+
+// Checks if a user has access to a specific ticket
+func userHasAccessToTicket(dbInstance *db.DB, userID, ticketID string) bool {
+	hasPermission, err := dbInstance.CheckUserPermission(userID, ticketID)
+	if err != nil {
+		return false
+	}
+	return hasPermission
+}
+
+// Middleware: Auth checks JWT token
+func AuthMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
+	return func(c echo.Context) error {
+		token := c.Request().Header.Get("Authorization")
+		if token == "" {
+			return c.JSON(http.StatusUnauthorized, map[string]string{"error": "Unauthorized"})
+		}
+
+		_, err := parseToken(token)
+		if err != nil {
+			return c.JSON(http.StatusUnauthorized, map[string]string{"error": "Invalid token"})
+		}
+
+		c.Set("userID", "exampleUserID") // Exemplo simples
+		return next(c)
+	}
+}
+
+// Simulated token parser
+func parseToken(token string) (string, error) {
+	if token == "valid-token" {
+		return "user123", nil
+	}
+	return "", errors.New("invalid token")
+}
+
+func main() {
 	configAPI := apiContext.GetAPIConfig()
 
 	if err := checkRequirements(configAPI); err != nil {
@@ -40,16 +98,20 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Inicializa conexão com o banco de dados
+	database, err := db.Connect()
+	if err != nil {
+		fmt.Printf("Erro ao conectar ao banco de dados: %v\n", err)
+		os.Exit(1)
+	}
+	defer database.Session.Close()
+
 	echoInstance := echo.New()
 	echoInstance.HideBanner = true
 
-	// Instantiate a template registry with an array of template set
-	// Ref: https://medium.freecodecamp.org/how-to-setup-a-nested-html-template-in-the-go-echo-web-framework-670f16244bb4
 	templates := make(map[string]*template.Template)
 	templates["form.html"] = template.Must(template.ParseFiles("views/form.html", "views/base.html"))
-	echoInstance.Renderer = &TemplateRegistry{
-		templates: templates,
-	}
+	echoInstance.Renderer = &TemplateRegistry{templates: templates}
 
 	echoInstance.Use(middleware.Logger())
 	echoInstance.Use(middleware.Recover())
@@ -57,32 +119,28 @@ func main() {
 
 	echoInstance.GET("/", handlers.FormPage)
 	echoInstance.GET("/healthcheck", handlers.HealthCheck)
-	echoInstance.GET("/ticket/:id", handlers.GetTicket)
 	echoInstance.POST("/register", handlers.RegisterUser)
 	echoInstance.POST("/login", handlers.Login)
 
+	ticketGroup := echoInstance.Group("/ticket")
+	ticketGroup.Use(isAuthorized(database))
+	ticketGroup.GET("/:id", handlers.GetTicket)
+
 	APIport := fmt.Sprintf(":%d", configAPI.APIPort)
 	echoInstance.Logger.Fatal(echoInstance.Start(APIport))
-
 }
 
 func checkRequirements(configAPI *apiContext.APIConfig) error {
-
-	// check if all environment variables are properly set.
 	if err := checkEnvVars(); err != nil {
 		return err
 	}
-
-	// check if MongoDB is accessible and credentials received are working.
 	if err := checkMongoDB(); err != nil {
 		return err
 	}
-
 	return nil
 }
 
 func checkEnvVars() error {
-
 	envVars := []string{
 		"MONGO_HOST",
 		"MONGO_DATABASE_NAME",
@@ -90,36 +148,24 @@ func checkEnvVars() error {
 		"MONGO_DATABASE_PASSWORD",
 	}
 
-	var envIsSet bool
-	var allEnvIsSet bool
-	var errorString string
-
-	env := make(map[string]string)
-	allEnvIsSet = true
-	for i := 0; i < len(envVars); i++ {
-		env[envVars[i]], envIsSet = os.LookupEnv(envVars[i])
-		if !envIsSet {
-			errorString = errorString + envVars[i] + " "
-			allEnvIsSet = false
+	var missingVars []string
+	for _, v := range envVars {
+		if _, exists := os.LookupEnv(v); !exists {
+			missingVars = append(missingVars, v)
 		}
 	}
 
-	if allEnvIsSet == false {
-		finalError := fmt.Sprintf("check environment variables: %s", errorString)
-		return errors.New(finalError)
+	if len(missingVars) > 0 {
+		return fmt.Errorf("missing environment variables: %v", missingVars)
 	}
 
 	return nil
 }
 
 func checkMongoDB() error {
-
 	_, err := db.Connect()
-
 	if err != nil {
-		mongoError := fmt.Sprintf("check mongoDB: %s", err)
-		return errors.New(mongoError)
+		return fmt.Errorf("check MongoDB: %v", err)
 	}
-
 	return nil
 }
