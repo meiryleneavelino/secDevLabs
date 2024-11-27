@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 
 	apiContext "github.com/globocom/secDevLabs/owasp-top10-2021-apps/a1/ecommerce-api/app/context"
 	"github.com/globocom/secDevLabs/owasp-top10-2021-apps/a1/ecommerce-api/app/handlers"
@@ -34,26 +35,41 @@ func (t *TemplateRegistry) Render(w io.Writer, name string, data interface{}, c 
 func isAuthorized(dbInstance *db.DB) echo.MiddlewareFunc {
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
 		return func(c echo.Context) error {
+			// Recuperar o token JWT do contexto
 			user, ok := c.Get("user").(*jwt.Token)
 			if !ok {
-				return echo.ErrUnauthorized
+				return echo.ErrUnauthorized // Retorna 401 se o token estiver ausente ou inválido
 			}
 
+			// Extrair as claims do token
 			claims, ok := user.Claims.(jwt.MapClaims)
 			if !ok {
-				return echo.ErrUnauthorized
+				return echo.ErrUnauthorized // Retorna 401 se as claims não puderem ser extraídas
 			}
 
-			userID := claims["id"]
+			// Garantir que a claim "id" exista
+			userID, ok := claims["id"].(string)
+			if !ok {
+				return echo.ErrUnauthorized // Retorna 401 se o campo "id" não existir ou estiver no formato errado
+			}
+
+			// Recuperar o ID do ticket da rota
 			ticketID := c.Param("id")
-			if !userHasAccessToTicket(dbInstance, fmt.Sprintf("%v", userID), ticketID) {
-				return echo.ErrUnauthorized
+			if ticketID == "" {
+				return echo.ErrBadRequest // Retorna 400 se o ticket ID não for informado
 			}
 
+			// Verificar permissão no banco de dados
+			if !userHasAccessToTicket(dbInstance, userID, ticketID) {
+				return echo.ErrUnauthorized // Retorna 401 se o usuário não tiver permissão
+			}
+
+			// Prosseguir para o próximo handler
 			return next(c)
 		}
 	}
 }
+
 
 // Checks if a user has access to a specific ticket
 func userHasAccessToTicket(dbInstance *db.DB, userID, ticketID string) bool {
@@ -66,29 +82,43 @@ func userHasAccessToTicket(dbInstance *db.DB, userID, ticketID string) bool {
 
 // Middleware: Auth checks JWT token
 func AuthMiddleware(next echo.HandlerFunc) echo.HandlerFunc {
-	return func(c echo.Context) error {
-		token := c.Request().Header.Get("Authorization")
-		if token == "" {
-			return c.JSON(http.StatusUnauthorized, map[string]string{"error": "Unauthorized"})
-		}
+    return func(c echo.Context) error {
+        tokenHeader := c.Request().Header.Get("Authorization")
+        if !strings.HasPrefix(tokenHeader, "Bearer ") {
+            return c.JSON(http.StatusUnauthorized, map[string]string{"error": "Invalid token format"})
+        }
 
-		_, err := parseToken(token)
-		if err != nil {
-			return c.JSON(http.StatusUnauthorized, map[string]string{"error": "Invalid token"})
-		}
+        token := strings.TrimPrefix(tokenHeader, "Bearer ")
+        userID, err := parseToken(token)
+        if err != nil {
+            return c.JSON(http.StatusUnauthorized, map[string]string{"error": err.Error()})
+        }
 
-		c.Set("userID", "exampleUserID") // Exemplo simples
-		return next(c)
-	}
+        c.Set("userID", userID)
+        return next(c)
+    }
 }
 
-// Simulated token parser
 func parseToken(token string) (string, error) {
-	if token == "valid-token" {
-		return "user123", nil
-	}
-	return "", errors.New("invalid token")
+    parsedToken, err := jwt.Parse(token, func(t *jwt.Token) (interface{}, error) {
+        return []byte("secretKey"), nil
+    })
+    if err != nil || !parsedToken.Valid {
+        return "", errors.New("invalid token")
+    }
+
+    claims, ok := parsedToken.Claims.(jwt.MapClaims)
+    if !ok {
+        return "", errors.New("invalid token claims")
+    }
+
+    userID, ok := claims["id"].(string)
+    if !ok {
+        return "", errors.New("invalid user ID in token")
+    }
+    return userID, nil
 }
+
 
 func main() {
 	configAPI := apiContext.GetAPIConfig()
@@ -121,10 +151,13 @@ func main() {
 	echoInstance.GET("/healthcheck", handlers.HealthCheck)
 	echoInstance.POST("/register", handlers.RegisterUser)
 	echoInstance.POST("/login", handlers.Login)
-
+	
 	ticketGroup := echoInstance.Group("/ticket")
-	ticketGroup.Use(isAuthorized(database))
-	ticketGroup.GET("/:id", handlers.GetTicket)
+    ticketGroup.Use(middleware.JWTWithConfig(middleware.JWTConfig{
+	      SigningKey: []byte("secretKey"), // Substitua por uma variável de ambiente
+    }))
+    ticketGroup.Use(isAuthorized(database))
+    ticketGroup.GET("/:id", handlers.GetTicket)
 
 	APIport := fmt.Sprintf(":%d", configAPI.APIPort)
 	echoInstance.Logger.Fatal(echoInstance.Start(APIport))
