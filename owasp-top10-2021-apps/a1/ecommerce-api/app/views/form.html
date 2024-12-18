@@ -87,8 +87,11 @@ document.getElementById('login').addEventListener('submit', (e) => {
     XHR.onreadystatechange = function (event) {
         if (XHR.readyState == 4) {
             if (XHR.status == 200) {
-                document.getElementById('page-title').innerHTML = "Your orders"
                 var jsonResponse = JSON.parse(XHR.responseText);
+                localStorage.setItem('auth_token', jsonResponse.token);
+                document.getElementById('page-title').innerHTML = "Your orders"
+                
+                console.log(jsonResponse)
 
                 // get ticket's user
                 var XHRticket = new XMLHttpRequest();
@@ -96,6 +99,7 @@ document.getElementById('login').addEventListener('submit', (e) => {
                     if (XHRticket.readyState == 4) {
                         if (XHRticket.status == 200) {
                             var jsonTicket = JSON.parse(XHRticket.responseText);
+                            console.log(jsonTicket)
 
                             document.getElementById('container-form').innerHTML = `
                             <div class="row">
@@ -124,6 +128,8 @@ document.getElementById('login').addEventListener('submit', (e) => {
                 };
                 XHRticket.open('GET', '//localhost:10005/ticket/'+jsonResponse["user_id"]+'?format=json');
                 XHRticket.setRequestHeader('Content-Type','application/json' );
+                XHRticket.setRequestHeader('Authorization', 'Bearer ' + jsonResponse.token);
+                
                 XHRticket.send();
             } else {
                 // Define what happens in case of error

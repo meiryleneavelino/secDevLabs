@@ -36,12 +36,14 @@ func ReadCookie(c echo.Context) error {
 // Login checks MongoDB if this user exists and then returns a JWT session cookie.
 func Login(c echo.Context) error {
 
+
 	loginAttempt := types.LoginAttempt{}
 	err := c.Bind(&loginAttempt)
 	if err != nil {
 		return c.JSON(http.StatusBadRequest, map[string]string{"result": "error", "details": "Error login1."})
 	}
 	// input validation missing!
+
 
 	userDataQuery := map[string]interface{}{"username": loginAttempt.Username}
 	userDataResult, err := db.GetUserData(userDataQuery)
@@ -67,6 +69,8 @@ func Login(c echo.Context) error {
 	// Set claims
 	claims := token.Claims.(jwt.MapClaims)
 	claims["name"] = userDataResult.Username
+	claims["userId"]= userDataResult.UserID
+	claims["Ticket"]= userDataResult.Ticket
 	claims["exp"] = time.Now().Add(time.Hour * 72).Unix()
 
 	// Generate encoded token and send it as response.
@@ -86,6 +90,8 @@ func Login(c echo.Context) error {
 			"result":   "success",
 			"username": userDataResult.Username,
 			"user_id":  userDataResult.UserID,
+			"Ticket": userDataResult.Ticket,
+			"token": t,
 		})
 	}
 
