@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"html/template"
 	"io"
+	"log"
+	"net/http"
 	"os"
 	"strconv"
 
@@ -33,11 +35,15 @@ func (t *TemplateRegistry) Render(w io.Writer, name string, data interface{}, c 
 	return tmpl.ExecuteTemplate(w, "base.html", data)
 }
 
+// Função para redirecionar HTTP para HTTPS
+func redirectToHTTPS(w http.ResponseWriter, r *http.Request) {
+	// Redireciona para HTTPS
+	http.Redirect(w, r, "https://localhost:10003"+r.RequestURI, http.StatusMovedPermanently)
+
+}
+
 func main() {
-
-	fmt.Println("[*] Starting Snake Pro...")
-
-	// loading viper
+	// Carregando configurações com Viper
 	viper.SetConfigName("config")
 	viper.AddConfigPath(".")
 	if err := viper.ReadInConfig(); err != nil {
@@ -47,55 +53,73 @@ func main() {
 		errorAPI(err)
 	}
 
-	// check if MongoDB is acessible and credentials received are working.
+	// Verificando conexão com MongoDB
 	if _, err := checkMongoDB(); err != nil {
-		fmt.Println("[X] ERROR MONGODB: ", err)
+		fmt.Println("[X] ERRO MONGODB: ", err)
 		os.Exit(1)
 	}
 
-	fmt.Println("[*] MongoDB: OK!")
-	fmt.Println("[*] Viper loaded: OK!")
-
+	// Configuração do Echo
 	echoInstance := echo.New()
 	echoInstance.HideBanner = true
 
+	// Middleware
 	echoInstance.Use(middleware.Logger())
 	echoInstance.Use(middleware.Recover())
 	echoInstance.Use(middleware.RequestID())
 
-	templates := make(map[string]*template.Template)
-	templates["form.html"] = template.Must(template.ParseFiles("views/form.html", "views/base.html"))
-	templates["game.html"] = template.Must(template.ParseFiles("views/game.html", "views/base.html"))
-	templates["ranking.html"] = template.Must(template.ParseFiles("views/ranking.html", "views/base.html"))
-
-	echoInstance.Renderer = &TemplateRegistry{
-		templates: templates,
+	// Configuração de templates
+	templates := map[string]*template.Template{
+		"form.html":    template.Must(template.ParseFiles("views/form.html", "views/base.html")),
+		"game.html":    template.Must(template.ParseFiles("views/game.html", "views/base.html")),
+		"ranking.html": template.Must(template.ParseFiles("views/ranking.html", "views/base.html")),
 	}
+	echoInstance.Renderer = &TemplateRegistry{templates: templates}
+
+	// Rotas públicas
 	echoInstance.GET("/healthcheck", api.HealthCheck)
 	echoInstance.POST("/register", api.Register)
 	echoInstance.POST("/login", api.Login)
 	echoInstance.GET("/login", api.PageLogin)
 	echoInstance.GET("/", api.Root)
+
+	// Rotas protegidas com JWT
 	r := echoInstance.Group("/game")
-	config := middleware.JWTConfig{
+	jwtConfig := middleware.JWTConfig{
 		TokenLookup: "cookie:sessionIDsnake",
 		SigningKey:  []byte(os.Getenv("SECRET_KEY")),
 	}
-	r.Use(middleware.JWTWithConfig(config))
-
+	r.Use(middleware.JWTWithConfig(jwtConfig))
 	r.GET("/play", api.PageGame)
 	r.GET("/ranking", api.PageRanking)
 
+	// Servidor HTTP para redirecionar para HTTPS
+	go func() {
+		log.Println("Servidor HTTP rodando em http://localhost:8080, redirecionando para HTTPS")
+		if err := http.ListenAndServe(":8080", http.HandlerFunc(redirectToHTTPS)); err != nil {
+			log.Fatal("Erro ao iniciar servidor HTTP:", err)
+		}
+	}()
+
+	// Pegando a porta da API (padrão: 10003)
 	APIport := fmt.Sprintf(":%d", getAPIPort())
-	echoInstance.Logger.Fatal(echoInstance.Start(APIport))
+
+	// Iniciando o servidor HTTPS corretamente com certificados
+	log.Println("Servidor HTTPS rodando em https://localhost" + APIport)
+	err := echoInstance.StartTLS(APIport, "cert.pem", "key.pem")
+	if err != nil {
+		log.Fatal("Erro ao iniciar servidor HTTPS:", err)
+	}
 }
 
+// Função para tratar erros na inicialização
 func errorAPI(err error) {
-	fmt.Println("[x] Error starting Snake Pro:")
-	fmt.Println("[x]", err)
+	fmt.Println("[X] Erro ao iniciar Snake Pro:")
+	fmt.Println("[X]", err)
 	os.Exit(1)
 }
 
+// Obtém a porta da API, padrão 10003 se não definida
 func getAPIPort() int {
 	apiPort, err := strconv.Atoi(os.Getenv("API_PORT"))
 	if err != nil {
@@ -104,6 +128,7 @@ func getAPIPort() int {
 	return apiPort
 }
 
+// Verifica conexão com MongoDB
 func checkMongoDB() (*db.DB, error) {
 	return db.Connect()
 }
