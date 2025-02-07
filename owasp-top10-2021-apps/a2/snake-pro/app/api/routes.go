@@ -112,7 +112,7 @@ func Login(c echo.Context) error {
 	//validPass := pass.CheckPass(userDataResult.Password, loginAttempt.Password)
 	//if !validPass {
 	// wrong password
-	//	return c.JSON(http.StatusForbidden, map[string]string{"result": "error", "details": "Error login."})
+	//  return c.JSON(http.StatusForbidden, map[string]string{"result": "error", "details": "Error login."})
 	//}
 
 	// comparando a senha fornecida com o hash armazenado
